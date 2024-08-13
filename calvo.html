@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <title>Gestor de eventos</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <style type="text/css">
+        .btn-danger {
+            color: #fff;
+            background-color: #d9534f;
+            border-color: #d43f3a;
+            margin-left: 10px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/qr-code-styling@1.5.0/lib/qr-code-styling.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/emailjs-com@2.6.4/dist/email.min.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@1.35.6/dist/umd/supabase.min.js"></script>
+
+
+<script type="text/javascript">
+    const SUPABASE_URL = 'https://nxezpmaggqsrniobqlft.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54ZXpwbWFnZ3Fzcm5pb2JxbGZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjI3MjQ2NDMsImV4cCI6MjAzODMwMDY0M30.vFPbDecBY43h1tvvkSdNzL40n2NFBNPuoskRbw6r3Ms';
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    emailjs.init("PRMD9SU60NX1m1aPz");
+
+    function generateUniqueCode() {
+        return 'xxxx-xxxx-xxxx-xxxx'.replace(/[x]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    async function generateQRCode(unique_code) {
+        const qrCode = new QRCodeStyling({
+            width: 300,
+            height: 300,
+            data: unique_code,
+            dotsOptions: {
+                color: "#000",
+                type: "rounded"
+            },
+            backgroundOptions: {
+                color: "#ffffff",
+            },
+            imageOptions: {
+                crossOrigin: "anonymous",
+            }
+        });
+
+        const blob = await qrCode.getRawData("png");
+        return blob;
+    }
+
+    async function uploadQRCode(blob, unique_code) {
+        const file = new File([blob], `${unique_code}.png`, { type: 'image/png' });
+        const { data, error } = await client.storage.from('qr-codes').upload(`public/${unique_code}.png`, file);
+        if (error) {
+            console.error('Error al subir código QR:', error);
+            return null;
+        }
+        return `${SUPABASE_URL}/storage/v1/object/public/qr-codes/public/${unique_code}.png`;
+    }
+
+    async function sendEmail(name, email, unique_code, qrCodeUrl) {
+        const templateParams = {
+            to_name: name,
+            to_email: email,
+            unique_code: unique_code,
+            qr_code: qrCodeUrl
+        };
+
+        try {
+            await emailjs.send('service_6asee9h', 'template_gyrim5l', templateParams);
+            console.log('Correo enviado exitosamente');
+        } catch (error) {
+            console.error('Error al enviar correo:', error);
+        }
+    }
+
+    async function addClient() {
+        const name = document.getElementById("client-name").value;
+        const email = document.getElementById("client-email").value;
+        const unique_code = generateUniqueCode();
+
+        const qrCodeBlob = await generateQRCode(unique_code);
+        const qrCodeUrl = await uploadQRCode(qrCodeBlob, unique_code);
+
+        if (!qrCodeUrl) {
+            console.error('No se pudo subir el código QR');
+            return;
+        }
+
+        const { data, error } = await client.from('clients').insert([{ name, email, unique_code, qr_code_url: qrCodeUrl }]);
+        if (error) {
+            console.error('Error al añadir cliente:', error);
+        } else {
+            await sendEmail(name, email, unique_code, qrCodeUrl);
+            displayClients();
+        }
+    }
+
+    async function displayClients() {
+        const { data: clients, error } = await client.from('clients').select('*');
+        if (error) console.error('Error al obtener clientes:', error);
+        else {
+            const tbody = document.getElementById("form-list-client-body");
+            tbody.innerHTML = '';
+            clients.forEach((client, i) => {
+                const row = document.createElement("tr");
+                row.innerHTML = `<td>${client.name}</td><td>${client.email}</td><td>${client.unique_code}</td>`;
+                const actionTd = document.createElement("td");
+                const editBtn = document.createElement("button");
+                editBtn.innerHTML = "Editar";
+                editBtn.classList.add("btn", "btn-sm", "btn-primary");
+                editBtn.onclick = () => editClient(i, client.id);
+                const deleteBtn = document.createElement("button");
+                deleteBtn.innerHTML = "Eliminar";
+                deleteBtn.classList.add("btn", "btn-sm", "btn-danger");
+                deleteBtn.onclick = () => deleteClient(client.id);
+                actionTd.append(editBtn, deleteBtn);
+                row.append(actionTd);
+                tbody.append(row);
+            });
+        }
+        document.getElementById("client-name").value = '';
+        document.getElementById("client-email").value = '';
+    }
+
+    let currentClientId = null;
+
+    function editClient(index, id) {
+        currentClientId = id;
+        const name = document.getElementById("client-name");
+        const email = document.getElementById("client-email");
+        const clients = Array.from(document.getElementById("form-list-client-body").children);
+        const client = clients[index].children;
+        name.value = client[0].innerText;
+        email.value = client[1].innerText;
+        document.getElementById("saveupdate").innerHTML = `<button class="btn btn-sm btn-success" onclick="updateClient()">Actualizar</button>`;
+    }
+
+    async function updateClient() {
+        const name = document.getElementById("client-name").value;
+        const email = document.getElementById("client-email").value;
+        const { data, error } = await client.from('clients').update({ name, email }).eq('id', currentClientId);
+        if (error) console.error('Error al actualizar cliente:', error);
+        else displayClients();
+        document.getElementById("saveupdate").innerHTML = `<button id="btn-save" name="btn-save" class="btn btn-success" onclick="addClient()">Guardar</button>`;
+        currentClientId = null;
+    }
+
+    async function deleteClient(id) {
+        const { data, error } = await client.from('clients').delete().eq('id', id);
+        if (error) console.error('Error al eliminar cliente:', error);
+        else displayClients();
+    }
+
+    document.addEventListener('DOMContentLoaded', displayClients);
+</script>
+
+
+
+    
+</head>
+<body>
+<div class="container">
+    <div class="row">
+        <div class="col-md-12">
+            <form class="form-horizontal" id="form-edit-client">
+                <fieldset>
+                    <legend>Cliente</legend>
+                    <div class="form-group">
+                        <label class="col-md-4 control-label" for="client-name">Nombre</label>
+                        <div class="col-md-4">
+                            <input id="client-name" name="client-name" type="text" placeholder="nombre de tu cliente" class="form-control input-md">
+                            <span class="help-block">Nombre completo de tu cliente</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-md-4 control-label" for="client-email">Email</label>
+                        <div class="col-md-4">
+                            <div class="input-group">
+                                <span class="input-group-addon">@</span>
+                                <input id="client-email" name="client-email" class="form-control" placeholder="tunombre@tudominio.com" type="text">
+                            </div>
+                            <p class="help-block">Email de tu cliente</p>
+                        </div>
+                    </div>
+                </fieldset>
+            </form>
+            <div class="form-group">
+                <label class="col-md-4 control-label" for="btn-save"></label>
+                <div class="col-md-4" id="saveupdate">
+                    <button id="btn-save" name="btn-save" class="btn btn-success" onclick="addClient()">Guardar</button>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-12">
+            <legend>Lista de clientes</legend>
+            <table class="table table-bordered table-condensed table-hover">
+                <thead>
+                    <tr>
+                        <th>Nombre</th>
+                        <th>Email</th>
+                        <th>Código Único</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="form-list-client-body">
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
